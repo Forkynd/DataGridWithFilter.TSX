@@ -1,0 +1,603 @@
+/**
+ * DataGridWithFilters
+ * -------------------
+ * Componente genérico baseado no MUI DataGrid que adiciona:
+ *
+ * ✅ Busca global em todas as colunas
+ * ✅ Filtros configuráveis por coluna (select ou texto)
+ * ✅ Geração automática de opções para filtros do tipo "select"
+ * ✅ Paginação padrão do DataGrid
+ * ✅ Área opcional para botão de exportação no rodapé
+ * ✅ Mensagem customizada quando não existirem linhas
+ *
+ * ------------------------------------------------------------------
+ * COMO FUNCIONA
+ *
+ * - A busca global procura o texto digitado em TODAS as colunas visíveis.
+ * - Os filtros são definidos via prop `filters` e aplicados com AND (todos precisam bater).
+ * - Para filtros do tipo "select":
+ *    • Se `options` for informado, ele será usado.
+ *    • Caso contrário, as opções são geradas automaticamente a partir das `rows`.
+ *
+ * - O componente é totalmente desacoplado dos dados,
+ *   bastando fornecer `rows` e `columns`.
+ *
+ * ------------------------------------------------------------------
+ * PROPS
+ *
+ *  rows        Array de objetos com os dados da tabela.
+ *  columns     Configuração padrão do MUI DataGrid (GridColDef).
+ *  filters     (Opcional) Configuração dos filtros exibidos.
+ *  emptyMessage (Opcional) Mensagem ou componente exibido quando não há linhas.
+ *  botaoExport (Opcional) Botão ou ação exibida no rodapé (ex.: exportar CSV).
+ *
+ * ------------------------------------------------------------------
+ * EXEMPLO DE USO:
+ * Veja abaixo um exemplo completo de utilização.
+ */
+import {
+  Box,
+  Button,
+  Collapse,
+  InputAdornment,
+  MenuItem,
+  TextField,
+} from "@mui/material";
+import {
+  DataGrid,
+  GridColDef,
+  GridFooterContainer,
+  GridSearchIcon,
+  ptPT,
+} from "@mui/x-data-grid";
+import { useMemo, useState } from "react";
+import FilterListIcon from "@mui/icons-material/FilterList";
+import { GridPagination } from "@mui/x-data-grid";
+
+type FilterType = "select" | "text";
+
+type SelectOption = {
+  valor: string; // valor usado no filtro
+  titulo: string; // texto exibido para o usuário
+};
+
+type FilterConfig = {
+  label: string; // Rótulo exibido no campo de filtro
+  field: string; // Nome do campo correspondente na row
+  type: FilterType; // "select" ou "text"
+  options?: SelectOption[]; // Opções manuais (somente se o valor for diferente do que voce quer mostrar no select)
+  allLabel?: string; // Texto do "Todos" (default: "Todos")
+  width?: number | string; // Largura do campo
+};
+
+type Props = {
+  rows: any[];
+  columns: GridColDef[];
+  filters?: FilterConfig[];
+  emptyMessage?: React.ReactNode;
+  botaoExport?: React.ReactNode;
+  mostrarContador?: boolean;
+  textoContador?: (total: number) => string;
+};
+
+export default function DataGridWithFilters({
+  rows,
+  columns,
+  filters = [],
+  emptyMessage,
+  botaoExport,
+  mostrarContador = false,
+  textoContador,
+}: Props) {
+  const [showFilters, setShowFilters] = useState(false);
+  const [search, setSearch] = useState("");
+  // Estado genérico para filtros:
+  const [filterValues, SetFilterValues] = useState<Record<string, string>>({});
+
+  // Atualiza valores de cada filtro individualmente
+  const handleFilterChange = (field: string, valor: string) => {
+    SetFilterValues((prev) => ({
+      ...prev,
+      [field]: valor,
+    }));
+  };
+
+  // função para limpar tudo
+  const handleClearFilters = () => {
+    setSearch(""); // limpa texto da busca
+    SetFilterValues({}); // limpa todos os filtros
+  };
+
+  // Aplica busca + filtros configuráveis
+  const normalize = (valor: unknown) =>
+    String(valor ?? "")
+      .normalize("NFD") // separa caracteres de acentos
+      .replace(/[\u0300-\u036f]/g, "") // remove acentos
+      .toLowerCase();
+
+  const filterRows = useMemo(() => {
+    const normalizedSearch = normalize(search);
+
+    return rows.filter((row) => {
+      // BUSCA GLOBAL
+      const matchSearch =
+        !normalizedSearch ||
+        columns.some((coluna) => {
+          // Pula colunas “técnicas” (opcional)
+          if (coluna.field === "__check__") return false;
+
+          let valorCelula: unknown;
+
+          // Se a coluna tiver valueGetter, usamos ele
+          if (coluna.valueGetter) {
+            valorCelula = coluna.valueGetter({ row, valor: row[coluna.field] });
+          } else {
+            valorCelula = row[coluna.field];
+          }
+
+          return normalize(valorCelula).includes(normalizedSearch);
+        });
+
+      // FILTROS POR COLUNA
+      const matchFilters = filters.every((filter) => {
+        const fieldName = filter.field;
+        const filterValue = filterValues[fieldName] || "Todos";
+        const rowValue = row[fieldName];
+
+        if (!filterValue || filterValue === "Todos") return true;
+
+        return normalize(rowValue) === normalize(filterValue);
+      });
+
+      return matchSearch && matchFilters;
+    });
+  }, [rows, search, columns, filters, filterValues]);
+
+  // Função para pegar valores distintos de um campo com base nas linhas
+  const getUniqueValuesForField = (field: string): string[] => {
+    const valores = new Set<string>();
+
+    rows.forEach((row) => {
+      const valor = row[field];
+
+      if (valor !== undefined && valor !== null && valor !== "") {
+        valor.add(String(valor));
+      }
+    });
+
+    return Array.from(valores).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  };
+
+  // Textos padrão em português (Portugal) do DataGrid
+  // const baseLocaleText =
+  //   ptPT.components.MuiDataGrid.defaultProps.localeText ?? {};
+
+  // // Se tiver errorMessage, mostramos ela no lugar de "Nenhuma linha"
+  // const localeText = {
+  //   ...baseLocaleText,
+  //   noRowsLabel: errorMessage
+  //     ? errorMessage
+  //     : baseLocaleText.noRowsLabel || "Nenhuma linha",
+  // };
+
+  return (
+    <>
+      {/* Botão de abrir/fechar filtros */}
+      {filters.length > 0 && (
+        <Box mb={2}>
+          <Button
+            variant="contained"
+            onClick={() => setShowFilters((v) => !v)}
+            sx={{
+              textTransform: "none",
+              borderRadius: 2,
+              py: 1,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              backgroundColor: "#3c0d6e",
+              "&:hover": {
+                backgroundColor: "#5a189a",
+              },
+            }}
+          >
+            <FilterListIcon
+              sx={{
+                transform: showFilters ? "rotate(180deg)" : "rotate(0deg)",
+                transition: "0.2s",
+              }}
+            />
+            Filtros de Busca
+          </Button>
+        </Box>
+      )}
+
+      {/* Bloco de filtros */}
+      {filters.length > 0 && (
+        <Collapse in={showFilters}>
+          <Box display="flex" gap={2} mb={2} flexWrap="wrap">
+            {/* Campo de busca */}
+            <TextField
+              placeholder="Buscar..."
+              size="small"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              sx={{
+                width: 260,
+                "& .MuiOutlinedInput-root": {
+                  borderRadius: 2,
+                },
+              }}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <GridSearchIcon fontSize="small" />
+                  </InputAdornment>
+                ),
+              }}
+            />
+
+            {filters.map((filter) => {
+              const valor = filterValues[filter.field] || "Todos";
+              const allLabel = filter.allLabel ?? "Todos";
+
+              // 1) Se o dev passou options no FilterConfig, use elas.
+              // 2) Se não, gere automaticamente a partir dos valores da coluna (rows).
+              const optionsForFilter: SelectOption[] =
+                filter.options && filter.options.length > 0
+                  ? filter.options
+                  : getUniqueValuesForField(filter.field).map((v) => ({
+                      valor: v, // usado na comparação de filtro
+                      titulo: v, // texto exibido (fallback)
+                    }));
+
+              if (filter.type === "select") {
+                return (
+                  <TextField
+                    key={filter.field}
+                    label={filter.label}
+                    select
+                    size="small"
+                    value={valor}
+                    onChange={(e) =>
+                      handleFilterChange(filter.field, e.target.value)
+                    }
+                    sx={{
+                      width: filter.width ?? 150,
+                      "& .MuiOutlinedInput-root": {
+                        borderRadius: 2,
+                      },
+                    }}
+                  >
+                    <MenuItem value="Todos">{allLabel}</MenuItem>
+
+                    {optionsForFilter.map((opt) => (
+                      <MenuItem key={opt.valor} value={opt.valor}>
+                        {opt.titulo}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                );
+              }
+
+              // Caso queira filtros de texto individual por campo
+              if (filter.type === "text") {
+                return (
+                  <TextField
+                    key={filter.field}
+                    label={filter.label}
+                    size="small"
+                    value={valor === "Todos" ? "" : valor}
+                    onChange={(e) =>
+                      handleFilterChange(filter.field, e.target.value)
+                    }
+                    sx={{ width: filter.width ?? 150 }}
+                  />
+                );
+              }
+
+              return null;
+            })}
+
+            <Button
+              variant="outlined"
+              onClick={handleClearFilters}
+              sx={{
+                textTransform: "none",
+                borderRadius: 2,
+
+                cursor: "pointer",
+                border: 2.5,
+                borderColor: "#3c0d6e",
+                color: "#3c0d6e",
+                "&:hover": {
+                  borderColor: "#5a189a",
+                  backgroundColor: "#e9daff",
+                },
+              }}
+            >
+              Limpar filtros
+            </Button>
+          </Box>
+        </Collapse>
+      )}
+      {mostrarContador && (
+        <Box
+          mb={1}
+          px={1}
+          fontSize={12}
+          fontWeight={500}
+          color="text.secondary"
+        >
+          {textoContador
+            ? textoContador(filterRows.length)
+            : `Total registros:${filterRows.length}`}
+        </Box>
+      )}
+
+      {/* DataGrid */}
+      <Box
+        sx={{
+          //boxShadow: "0 4px 12px rgba(60, 13, 110, 0.35)",
+          borderRadius: 3,
+          overflow: "hidden", // ✅ recorta header + body + footer
+          bgcolor: "background.paper",
+        }}
+      >
+        <div style={{ height: 500, width: "100%" }}>
+          <DataGrid
+            rows={filterRows}
+            columns={columns}
+            getRowId={(row) => row.id_solicitacao ?? row.id_tipo_solicitacao}
+            localeText={ptPT.components.MuiDataGrid.defaultProps.localeText}
+            getRowClassName={(params) =>
+              params.indexRelativeToCurrentPage % 2 === 0
+                ? "even-row"
+                : "odd-row"
+            }
+            // Altura dinâmica das linhas
+            getRowHeight={() => "auto"}
+            //opcional:
+            slots={{
+              noRowsOverlay: () => (
+                <div
+                  style={{
+                    height: "100%",
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center", // centraliza vertical
+                    justifyContent: "center", // centraliza horizontal
+                    color: "#666",
+                  }}
+                >
+                  {emptyMessage ?? "Nenhuma linha"}
+                </div>
+              ),
+
+              footer: () => (
+                <GridFooterContainer
+                  sx={{
+                    backgroundColor: "#4B0082", // mantém seu roxo
+                    color: "white",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    px: 2,
+                  }}
+                >
+                  {/* Paginação padrão */}
+                  <GridPagination />
+
+                  {/* Botão Exportar */}
+                  {botaoExport && <Box>{botaoExport}</Box>}
+                </GridFooterContainer>
+              ),
+            }}
+            sx={{
+              // Borda vertical entre colunas.
+              "& .MuiDataGrid-cell + .MuiDataGrid-cell": {
+                borderLeft: "1px solid rgba(39, 33, 60, 0.25)",
+              },
+
+              "& *": {
+                scrollbarWidth: "thin",
+                scrollbarColor: " rgb(128, 117, 172) rgb(39, 33, 60)",
+              },
+              // Cabeçalho
+              "& .MuiDataGrid-columnHeaders": {
+                backgroundColor: "#3c0d6e",
+                color: "white",
+                fontWeight: 700,
+                fontSize: "10px",
+                maxHeight: "none !important", // permite crescer se precisar
+              },
+              "& .MuiDataGrid-columnHeader:hover": {
+                backgroundColor: "#5a1096",
+              },
+
+              // Linhas
+              "& .MuiDataGrid-row": {
+                cursor: "pointer",
+                fontSize: "10px",
+              },
+              "& .MuiDataGrid-row.even-row": {
+                backgroundColor: "#ffffff",
+              },
+              "& .MuiDataGrid-row.odd-row": {
+                backgroundColor: "rgb(228, 228, 228)",
+              },
+              "& .MuiDataGrid-row:hover": {
+                backgroundColor: "#EEE6F5 !important",
+              },
+              "& .MuiDataGrid-row.Mui-selected": {
+                backgroundColor: "#ceb8f2 !important",
+              },
+              "& .MuiDataGrid-row.Mui-selected:hover": {
+                backgroundColor: "#CBB3F1 !important",
+              },
+
+              // Células
+              "& .MuiDataGrid-cell": {
+                padding: "8px 12px", // 👈 padding vertical e horizontal
+                borderBottom: "2px solid rgba(39, 33, 60, 0.25)",
+                whiteSpace: "normal", // permite quebrar linha
+                wordBreak: "break-word", // quebra palavras muito grandes se precisar
+              },
+
+              // Borda entre cabeçalhos
+              "& .MuiDataGrid-columnHeader + .MuiDataGrid-columnHeader": {
+                borderLeft: "2px solid rgba(39, 33, 60, 0.25)",
+              },
+
+              // Rodapé / Paginação
+              "& .MuiDataGrid-footerContainer": {
+                backgroundColor: "#4B0082",
+                color: "white",
+                borderTop: "none",
+              },
+              "& .MuiTablePagination-root": {
+                color: "white",
+              },
+              "& .MuiTablePagination-selectLabel": {
+                color: "white",
+              },
+              "& .MuiTablePagination-displayedRows": {
+                color: "white",
+              },
+              "& .MuiTablePagination-actions .MuiSvgIcon-root": {
+                color: "white",
+              },
+              "& .MuiTablePagination-selectIcon": {
+                color: "white",
+              },
+
+              /* ===================== ÍCONES DO CABEÇALHO ===================== */
+
+              // Container que o MUI esconde fora do hover
+              "&& .MuiDataGrid-columnHeader .MuiDataGrid-iconButtonContainer": {
+                visibility: "visible",
+                opacity: 1,
+                width: "auto",
+                mr: 0,
+              },
+
+              //Três pontinhos (menu)
+              "&& .MuiDataGrid-menuIconButton": {
+                color: "white",
+                opacity: 1,
+              },
+              "&& .MuiDataGrid-menuIconButton .MuiSvgIcon-root": {
+                color: "white",
+                opacity: 1,
+              },
+
+              //  Seta de ordenação
+              "&& .MuiDataGrid-sortIcon": {
+                color: "white",
+                opacity: 1,
+                fontSize: 15,
+              },
+              // Quando a coluna está ordenando (opcional: destaque)
+              '&& .MuiDataGrid-columnHeader[aria-sort="ascending"] .MuiDataGrid-sortIcon, \
+     && .MuiDataGrid-columnHeader[aria-sort="descending"] .MuiDataGrid-sortIcon':
+                {
+                  color: "#ffffff",
+                  opacity: 1,
+                },
+
+              // 4) Separador e qualquer SVG no header (garantia)
+              "&& .MuiDataGrid-iconSeparator": {
+                color: "white",
+                opacity: 1,
+              },
+              "&& .MuiDataGrid-columnHeader .MuiSvgIcon-root": {
+                color: "white",
+                opacity: 1,
+              },
+
+              // Acessibilidade de focus
+              "& .MuiDataGrid-cell:focus, & .MuiDataGrid-cell:focus-within": {
+                outline: "none",
+              },
+              "& .MuiDataGrid-columnHeader:focus, & .MuiDataGrid-columnHeader:focus-within":
+                {
+                  outline: "none",
+                },
+
+              "& .MuiDataGrid-columnHeaderTitle": {
+                whiteSpace: "normal",
+                lineHeight: "1.2", // deixa a altura das linhas do header mais bonitinha
+              },
+              "& .MuiDataGrid-columnHeader": {
+                height: "unset !important", // remove altura fixa padrão
+              },
+            }}
+          />
+        </div>
+      </Box>
+    </>
+  );
+}
+
+// import DataGridWithFilters from "@/components/DataGridWithFilters";
+// import { GridColDef } from "@mui/x-data-grid";
+// import { Button } from "@mui/material";
+
+// // Exemplo de colunas
+// const columns: GridColDef[] = [
+//   { field: "id", headerName: "ID", width: 80 },
+//   { field: "nome", headerName: "Nome", width: 200 },
+//   { field: "status", headerName: "Status", width: 150 },
+//   { field: "tipo", headerName: "Tipo", width: 150 },
+// ];
+
+// // Exemplo de linhas
+// const rows = [
+//   { id: 1, nome: "Solicitação A", status: "Ativo", tipo: "Interno" },
+//   { id: 2, nome: "Solicitação B", status: "Inativo", tipo: "Externo" },
+//   { id: 3, nome: "Solicitação C", status: "Ativo", tipo: "Interno" },
+// ];
+
+// // Configuração dos filtros
+// const filters = [
+//   {
+//     label: "Status",
+//     field: "status",
+//     type: "select",
+//     options: [
+//       { valor: "1", titulo: "Ativo" },
+//       { valor: "2", titulo: "Inativo" },
+//     ],
+//   },
+//   {
+//     label: "Tipo",
+//     field: "tipo",
+//     type: "select",
+//     // Aqui NÃO passamos options:
+//     // o componente irá gerar automaticamente com base em `rows`
+//   },
+//   {
+//     label: "Nome",
+//     field: "nome",
+//     type: "text",
+//     width: 200,
+//   },
+// ];
+
+// export default function TelaExemplo() {
+//   return (
+//     <DataGridWithFilters
+//       rows={rows}
+//       columns={columns}
+//       //opcionais:
+//       filters={filters}
+//       emptyMessage="Nenhuma solicitação encontrada"
+//       botaoExport={
+//        //Pode importar o <BotaoExportBase/>
+//         <Button variant="contained" onClick={() => console.log("Exportar")}>
+//           Exportar
+//         </Button>
+//       }
+//     />
+//   );
+// }
